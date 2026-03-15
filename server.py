@@ -1,11 +1,19 @@
 import json
 import os
+import re
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import google.generativeai as genai
 from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
 try:
     from transcribe_audio import transcribe_audio
     TRANSCRIBE_AVAILABLE = True
@@ -13,13 +21,25 @@ except ImportError:
     transcribe_audio = None
     TRANSCRIBE_AVAILABLE = False
 
+# Resolve project root for serving static files and index.html
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 app = FastAPI()
+
+# Configurable CORS origins (e.g. ALLOWED_ORIGINS=https://app.example.com,https://www.example.com or * for dev)
+_origins = os.getenv("ALLOWED_ORIGINS", "*").strip()
+ALLOWED_ORIGINS = ["*"] if _origins == "*" else [o.strip() for o in _origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount static assets if present (e.g. CSS, JS, images)
+_static_dir = PROJECT_ROOT / "static"
+if _static_dir.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 # ── LLM configuration (Gemini) ──────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -31,10 +51,16 @@ GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
 
 
 def _clean_json_block(text: str) -> str:
-    cleaned = text.strip()
+    """Extract the JSON array from LLM output: first '[' to last ']', ignoring conversational filler."""
+    text = text.strip()
+    # Regex: match from first '[' to last ']' (DOTALL so newlines inside array are included)
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if match:
+        return match.group(0)
+    # Fallback: strip markdown code fences and return as-is
     for fence in ("```json", "```JSON", "```"):
-        cleaned = cleaned.replace(fence, "")
-    return cleaned.strip()
+        text = text.replace(fence, "")
+    return text.strip()
 
 
 def _parse_movies_from_text(text: str):
@@ -112,7 +138,7 @@ async def transcribe(file: UploadFile = File(...)):
     if not TRANSCRIBE_AVAILABLE:
         raise HTTPException(
             status_code=503,
-            detail="Voice transcription unavailable (missing pplx/llm_api). Use text input.",
+            detail="Voice transcription unavailable (missing elevenlabs). Use text input.",
         )
     try:
         audio_bytes = await file.read()
@@ -134,11 +160,15 @@ async def transcribe(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 async def index():
-    with open("index.html") as f:
-        return f.read()
+    index_path = PROJECT_ROOT / "index.html"
+    if not index_path.is_file():
+        raise HTTPException(status_code=404, detail="index.html not found")
+    return FileResponse(index_path, media_type="text/html")
 
+
+# Production: run with `uvicorn server:app` or `gunicorn server:app -k uvicorn.workers.UvicornWorker`
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=3000)
