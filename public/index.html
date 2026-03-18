@@ -212,7 +212,7 @@ textarea::placeholder{color:var(--text-muted)}
 .cards{display:flex;flex-direction:column;gap:16px}
 .card{
   background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-  padding:20px;position:relative;overflow:hidden;
+  padding:16px 18px;position:relative;overflow:hidden;
   opacity:0;transform:translateY(20px);
   transition:transform var(--transition),box-shadow var(--transition),border-color var(--transition);
   animation:card-in 0.5s cubic-bezier(0.16,1,0.3,1) forwards;
@@ -233,7 +233,34 @@ textarea::placeholder{color:var(--text-muted)}
 .card:hover::before{opacity:1}
 @keyframes card-in{to{opacity:1;transform:translateY(0)}}
 
-.card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
+.card-layout{
+  display:flex;align-items:flex-start;gap:16px;
+}
+.card-poster{
+  flex-shrink:0;
+  width:110px;
+  border-radius:10px;
+  overflow:hidden;
+  background:linear-gradient(150deg,#30251a,#18100a);
+  box-shadow:0 10px 26px rgba(0,0,0,0.65);
+  position:relative;
+}
+.card-poster img{
+  display:block;
+  width:100%;
+  height:100%;
+  object-fit:cover;
+}
+.card-poster::after{
+  content:'';
+  position:absolute;inset:0;
+  background:radial-gradient(circle at 0 0,rgba(0,0,0,0.15),transparent 55%);
+  pointer-events:none;
+}
+.card-body{
+  flex:1;
+}
+.card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
 .card-badges{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px}
 .badge{
   font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;
@@ -283,22 +310,17 @@ footer a{font-size:12px;color:var(--text-muted);text-decoration:none;transition:
 footer a:hover{color:var(--text)}
 
 /* Mobile */
-@media(max-width:480px){
+@media(max-width:640px){
   .hero h1{font-size:2rem}
-  .card-top{flex-direction:column}
-  .card-meta{text-align:left}
+  .card-layout{flex-direction:column}
+  .card-poster{width:100%;max-height:260px}
+  .card-meta{text-align:left;margin-top:6px}
 }
 </style>
 </head>
 <body>
-<!-- HTTPS banner: shown if not secure or in iframe -->
-<div id="httpsBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:999;background:#1a1400;border-bottom:1px solid rgba(232,168,36,0.4);padding:10px 16px;display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;color:#e8e4dc">
-  <svg viewBox="0 0 20 20" fill="currentColor" style="width:16px;height:16px;flex-shrink:0;color:#e8a824"><path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/></svg>
-  <span>Voice requires mic permission — open the app directly for full access</span>
-  <a id="openTabLink" href="#" target="_blank" rel="noopener" style="background:#e8a824;color:#1a0f00;padding:5px 14px;border-radius:6px;font-weight:700;font-size:12px;text-decoration:none;white-space:nowrap">Open in new tab ↗</a>
-</div>
 
-<div class="app" id="mainApp" style="padding-top:0">
+<div class="app" id="mainApp">
   <header class="header">
     <div class="logo">
       <svg aria-label="CineMatch" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:36px;height:36px">
@@ -318,7 +340,7 @@ footer a:hover{color:var(--text)}
     </div>
     <div class="status">
       <span class="status-dot"></span>
-      Voice Ready
+      <span id="statusText">Voice Ready</span>
     </div>
     <!-- allow mic in iframe -->
     <meta http-equiv="Permissions-Policy" content="microphone=*">
@@ -419,22 +441,6 @@ footer a:hover{color:var(--text)}
 const $ = id => document.getElementById(id);
 let isListening = false;
 
-// Detect insecure context or iframe — mic won't work in either
-(function() {
-  const inIframe = window !== window.top;
-  const notSecure = location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1';
-  if (inIframe || notSecure) {
-    const banner = $('httpsBanner');
-    banner.style.display = 'flex';
-    $('mainApp').style.paddingTop = '52px';
-    // Set the open-in-tab link to the current page URL in the top frame
-    const url = window.location.href;
-    $('openTabLink').href = url;
-    // Also make the mic button open the page in a new tab instead of erroring
-    $('micBtn').title = 'Voice requires opening in a new tab';
-  }
-})();
-
 // Auto-resize textarea
 const ta = $('queryInput');
 ta.addEventListener('input', () => {
@@ -446,96 +452,92 @@ ta.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSearch(); }
 });
 
-// ── Voice via MediaRecorder → server transcription ──────────────────────
-let mediaRecorder = null;
-let audioChunks = [];
-let micStream = null;
+// ── Voice via Web Speech API (browser-native, no server call) ────────────────
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const speechSupported = !!SpeechRecognition;
+let recognition = null;
+
+// Hide mic button on unsupported browsers (Firefox)
+if (!speechSupported) {
+  $('micBtn').style.display = 'none';
+  $('statusText').textContent = 'Type to search';
+}
 
 $('micBtn').addEventListener('click', toggleVoice);
 
-async function toggleVoice() {
+function toggleVoice() {
   if (isListening) {
     stopListening();
     return;
   }
+  if (!speechSupported) return;
   clearError();
 
-  // Request mic
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (err) {
-    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-      showError('Mic blocked — click "Open in new tab" above, then allow microphone when prompted.');
-    } else if (err.name === 'NotFoundError') {
-      showError('No microphone found. Please connect one and try again.');
-    } else if (err.message && err.message.toLowerCase().includes('security')) {
-      showError('Voice requires HTTPS — click "Open in new tab ↗" in the banner above to use voice input.');
-    } else {
-      showError('Mic error: ' + err.message + '. Try opening in a new tab.');
-    }
-    return;
-  }
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-US';
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
 
-  micStream = stream;
-  audioChunks = [];
-
-  // Pick best supported format
-  const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/mp4']
-    .find(t => MediaRecorder.isTypeSupported(t)) || '';
-
-  mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
-  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
-  mediaRecorder.onstop = async () => {
-    // Release mic
-    micStream.getTracks().forEach(t => t.stop());
-    micStream = null;
-    setListeningUI(false);
-
-    if (audioChunks.length === 0) return;
-    const blob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
-
-    // Show transcribing state
-    $('transcriptText').textContent = 'Transcribing…';
+  recognition.onstart = () => {
+    isListening = true;
+    setListeningUI(true);
+    $('transcriptText').textContent = 'Listening…';
     $('voiceIndicator').classList.add('show');
+  };
 
-    try {
-      const form = new FormData();
-      form.append('file', blob, 'audio.webm');
-      const res = await fetch('/api/transcribe', { method: 'POST', body: form });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Transcription failed');
-      const { text } = await res.json();
-      $('voiceIndicator').classList.remove('show');
-      if (text && text.trim()) {
-        ta.value = text.trim();
-        ta.style.height = 'auto';
-        ta.style.height = ta.scrollHeight + 'px';
-        $('findBtn').disabled = false;
-        doSearch(ta.value);
+  recognition.onresult = (event) => {
+    let interim = '';
+    let final = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (event.results[i].isFinal) {
+        final += event.results[i][0].transcript;
       } else {
-        showError('No speech detected. Try speaking louder or closer to your mic.');
+        interim += event.results[i][0].transcript;
       }
-    } catch (err) {
-      $('voiceIndicator').classList.remove('show');
-      showError('Transcription error: ' + err.message);
+    }
+    const current = final || interim;
+    if (current) {
+      ta.value = current;
+      ta.style.height = 'auto';
+      ta.style.height = ta.scrollHeight + 'px';
+      $('findBtn').disabled = false;
+      $('transcriptText').textContent = current;
     }
   };
 
-  mediaRecorder.start();
-  isListening = true;
-  setListeningUI(true);
-  $('transcriptText').textContent = 'Recording… tap mic to stop';
+  recognition.onend = () => {
+    $('voiceIndicator').classList.remove('show');
+    setListeningUI(false);
+    isListening = false;
+    const text = ta.value.trim();
+    if (text) {
+      doSearch(text);
+    }
+  };
+
+  recognition.onerror = (event) => {
+    $('voiceIndicator').classList.remove('show');
+    setListeningUI(false);
+    isListening = false;
+    if (event.error === 'not-allowed') {
+      showError('Microphone permission denied. Please allow mic access in your browser settings.');
+    } else if (event.error === 'no-speech') {
+      showError('No speech detected. Try speaking louder or closer to your mic.');
+    } else if (event.error !== 'aborted') {
+      showError('Voice error: ' + event.error + '. Try typing instead.');
+    }
+  };
+
+  recognition.start();
 }
 
 function stopListening() {
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop(); // triggers onstop
-  } else {
-    micStream?.getTracks().forEach(t => t.stop());
-    micStream = null;
-    setListeningUI(false);
+  if (recognition) {
+    recognition.stop();
+    recognition = null;
   }
   isListening = false;
+  setListeningUI(false);
 }
 
 function setListeningUI(on) {
@@ -543,11 +545,7 @@ function setListeningUI(on) {
   $('micIcon').style.display = on ? 'none' : '';
   $('waveIcon').style.display = on ? 'block' : 'none';
   $('inputWrap').classList.toggle('listening', on);
-  if (!on) {
-    $('inputHint').textContent = 'Press Enter or click Find →';
-  } else {
-    $('inputHint').textContent = 'Tap mic to stop recording';
-  }
+  $('inputHint').textContent = on ? 'Tap mic to stop' : 'Press Enter or click Find →';
 }
 
 $('findBtn').addEventListener('click', () => doSearch());
@@ -578,7 +576,11 @@ async function doSearch(query) {
     if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Request failed'); }
     const data = await res.json();
     setLoading(false);
-    renderResults(data.movies, q);
+    if (data.movies && data.movies.length > 0) {
+      renderResults(data.movies, q);
+    } else {
+      showError(data.message || 'No movies found — try a different description.');
+    }
   } catch (err) {
     setLoading(false);
     showError(err.message || 'Something went wrong. Please try again.');
@@ -600,40 +602,49 @@ function renderResults(movies, query) {
     const ratingNum = parseFloat(m.rating);
     const ratingMax = parseFloat(m.rating.split('/')[1]) || 10;
     const pct = Math.round((ratingNum / ratingMax) * 100);
+    const imgHtml = m.imageUrl
+      ? `<div class="card-poster"><img src="${escHtml(m.imageUrl)}" alt="Poster for ${escHtml(m.title)}"></div>`
+      : `<div class="card-poster"></div>`;
+
     container.insertAdjacentHTML('beforeend', `
       <article class="card">
-        <div class="card-top">
-          <div>
-            <div class="card-badges">
-              <span class="badge">#${i+1} Pick</span>
-              <span class="badge badge-mood">${escHtml(m.mood)}</span>
+        <div class="card-layout">
+          ${imgHtml}
+          <div class="card-body">
+            <div class="card-top">
+              <div>
+                <div class="card-badges">
+                  <span class="badge">#${i+1} Pick</span>
+                  <span class="badge badge-mood">${escHtml(m.mood)}</span>
+                </div>
+                <div class="card-title">${escHtml(m.title)}</div>
+                <div class="card-sub">${m.year} · ${escHtml(m.director)}</div>
+              </div>
+              <div class="card-meta">
+                <span>${escHtml(m.duration)}</span>
+                <span style="margin-top:2px">${escHtml(m.genre)}</span>
+              </div>
             </div>
-            <div class="card-title">${escHtml(m.title)}</div>
-            <div class="card-sub">${m.year} · ${escHtml(m.director)}</div>
+            <div class="stars">
+              <div class="star-wrap">
+                ★★★★★
+                <div class="star-fill" style="width:${pct}%">★★★★★</div>
+              </div>
+              <span class="rating-num">${escHtml(m.rating)}</span>
+            </div>
+            <p class="synopsis">${escHtml(m.synopsis)}</p>
+            <div class="why-box">
+              <div class="why-label">Why this matches ✦</div>
+              <div class="why-text">${escHtml(m.why)}</div>
+            </div>
+            <div class="streaming">
+              <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 2a6 6 0 100 12A6 6 0 008 2zM1 8a7 7 0 1114 0A7 7 0 011 8z" fill="currentColor"/>
+                <path d="M5.5 8.5l1.5 1 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              ${escHtml(m.streamingNote)}
+            </div>
           </div>
-          <div class="card-meta">
-            <span>${escHtml(m.duration)}</span>
-            <span style="margin-top:2px">${escHtml(m.genre)}</span>
-          </div>
-        </div>
-        <div class="stars">
-          <div class="star-wrap">
-            ★★★★★
-            <div class="star-fill" style="width:${pct}%">★★★★★</div>
-          </div>
-          <span class="rating-num">${escHtml(m.rating)}</span>
-        </div>
-        <p class="synopsis">${escHtml(m.synopsis)}</p>
-        <div class="why-box">
-          <div class="why-label">Why this matches ✦</div>
-          <div class="why-text">${escHtml(m.why)}</div>
-        </div>
-        <div class="streaming">
-          <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M8 2a6 6 0 100 12A6 6 0 008 2zM1 8a7 7 0 1114 0A7 7 0 011 8z" fill="currentColor"/>
-            <path d="M5.5 8.5l1.5 1 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          ${escHtml(m.streamingNote)}
         </div>
       </article>
     `);
