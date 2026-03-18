@@ -68,17 +68,28 @@ TMDB_GENRE_NAMES: Dict[int, str] = {
 # ── JSON helpers ──────────────────────────────────────────────────────────────
 
 def _clean_json_block(text: str) -> str:
-    """Strip markdown fences and extract the first JSON array or object."""
+    """Strip markdown fences and extract the first complete JSON array or object."""
     text = text.strip()
-    # Try to find a JSON array first, then object
-    for pattern in (r"\[.*\]", r"\{.*\}"):
-        match = re.search(pattern, text, re.DOTALL)
-        if match:
-            return match.group(0)
-    # Fallback: strip markdown fences
+    # Strip markdown fences first
     for fence in ("```json", "```JSON", "```"):
         text = text.replace(fence, "")
-    return text.strip()
+    text = text.strip()
+    # Find first complete JSON array (greedy is fine here — arrays rarely nest weirdly)
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if match:
+        return match.group(0)
+    # Find first complete JSON object using balanced brace counting (avoids greedy over-match)
+    start = text.find("{")
+    if start != -1:
+        depth = 0
+        for i, ch in enumerate(text[start:], start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+    return text
 
 
 def build_tmdb_params(gemini_json_str: str) -> Dict[str, Any]:
@@ -205,7 +216,7 @@ For each of the following movies, provide:
 2. "mood": 2-4 word mood tag (e.g. "Dark & Thrilling", "Heartwarming & Fun", "Mind-Bending")
 3. "director": the director's full name
 4. "duration": runtime formatted as "Xh Ymin" (e.g. "2h 15min") or "Xh" if no minutes
-5. "streamingNote": best guess at where it streams (e.g. "Available on Netflix", "Available on HBO Max") or "Check streaming availability"
+5. "streamingNote": if you are confident the movie is on a major platform (Netflix, HBO Max, Disney+, Prime Video, Hulu), say "Available on [platform]". If unsure, say "Check streaming availability" — do NOT guess.
 
 Movies:
 {movies_json}
@@ -273,7 +284,6 @@ async def recommend(req: RecommendRequest):
 
     tmdb_params = build_tmdb_params(filter_response.text or "")
     tmdb_params["api_key"] = TMDB_API_KEY
-    tmdb_params.setdefault("vote_count.gte", 100)
 
     # Step 2: Fetch movies from TMDB Discover
     try:
